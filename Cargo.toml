@@ -1,0 +1,22 @@
+[package]
+name = "apigrok"
+version = "0.1.0"
+authors = ["API Grokkers <team@apigrok.io>"]
+edition = "2024"
+description = "A powerful API debugging CLI"
+license = "Apache-2.0"
+
+repository = "https://github.com/apigrok/apigrok-cli"
+homepage = "https://apigrok.io"
+readme = "README.md"
+
+keywords = ["api", "cli", "debugging"]
+categories = ["command-line-utilities"]
+exclude = [".github", ".gitignore", ".vscode"]
+
+[[bin]]
+name = "apigrok"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
