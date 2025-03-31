@@ -108,6 +108,27 @@ We welcome contributions! Please read our [Contributing Guidelines]() for detail
 
 5. Open a Pull Request
 
+# Development Setup
+
+### Quick Start for Contributors
+```bash
+git clone https://github.com/apigrok/apigrok-cli.git
+cd apigrok-cli
+cargo build
+cargo test
+```
+
+### Project Structure
+
+```bash
+src/
+├── main.rs          # CLI entry point
+├── commands/        # Command implementations
+├── protocols/       # Protocol implementations
+├── utils/           # Helper functions
+└── config/          # Configuration handling
+```
+
 # Roadmap 🗺️
 * Basic HTTP client functionality
 * Interactive TUI mode
