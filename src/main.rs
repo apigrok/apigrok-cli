@@ -22,7 +22,7 @@ enum Commands {
         protocol: Protocol,
 
         /// Output format (json, table)
-        #[arg(short, long, default_value = "table")]
+        #[arg(short, long, default_value = "json")]
         format: String,
     },
     Analyze {
@@ -65,11 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn display_response(response: &ApiResponse, format: &str) -> Result<(), Box<dyn Error>> {
     match format {
         "json" => {
-            println!("{}", serde_json::to_string_pretty(response)?);
+            println!("{}", serde_json::to_string(&response.display_body())?);
         }
-        "table" => {
-            print_response_table(response);
-        }
+        "table" => unimplemented!("table not yet implemented, if ever"),
         _ => {
             if let Some(body) = &response.body {
                 println!("{}", String::from_utf8_lossy(body));
@@ -77,28 +75,4 @@ fn display_response(response: &ApiResponse, format: &str) -> Result<(), Box<dyn 
         }
     }
     Ok(())
-}
-
-fn print_response_table(response: &ApiResponse) {
-    use prettytable::{Table, row};
-
-    let mut table = Table::new();
-    table.add_row(row!["Metric", "Value"]);
-    table.add_row(row!["Protocol", response.protocol]);
-    table.add_row(row!["Status", response.status.unwrap_or(0)]);
-    table.add_row(row!["Duration", format!("{:?}", response.duration)]);
-
-    table.add_row(row![b->"Headers"]);
-
-    if let Some(headers) = &response.headers {
-        for (i, (name, value)) in headers.iter().enumerate() {
-            if i < 5 {
-                table.add_row(row![name, value]);
-            } else if i == 5 {
-                table.add_row(row![Fy->format!("... and {} more", headers.len() - 5)]);
-            }
-        }
-    }
-
-    table.printstd();
 }
