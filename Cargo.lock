@@ -74,6 +74,7 @@ dependencies = [
  "async-trait",
  "base64",
  "clap",
+ "clap_complete",
  "prettytable-rs",
  "reqwest",
  "serde",
@@ -178,6 +179,15 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+]
+
+[[package]]
+name = "clap_complete"
+version = "4.5.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c06f5378ea264ad4f82bbc826628b5aad714a75abf6ece087e923010eb937fb6"
+dependencies = [
+ "clap",
 ]
 
 [[package]]
