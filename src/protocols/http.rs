@@ -8,8 +8,8 @@ pub struct HttpClient {
 
 pub enum HttpVersion {
     Http1,
-    Http2,
-    Http3,
+    //Http2,
+    //Http3,
 }
 
 #[async_trait]
@@ -17,10 +17,10 @@ impl ApiProtocol for HttpClient {
     async fn fetch(&self, url: &str) -> Result<ApiResponse, Box<dyn Error>> {
         let client = match self.version {
             HttpVersion::Http1 => Client::builder().http1_only().build()?,
-            HttpVersion::Http2 => Client::builder().http2_prior_knowledge().build()?,
-            HttpVersion::Http3 => {
-                unimplemented!("HTTP/3 support coming soon")
-            }
+            // HttpVersion::Http2 => Client::builder().http2_prior_knowledge().build()?,
+            // HttpVersion::Http3 => {
+            //     unimplemented!("HTTP/3 support coming soon")
+            // }
         };
 
         let start = Instant::now();
@@ -42,13 +42,12 @@ impl ApiProtocol for HttpClient {
             path: path,
             protocol: match self.version {
                 HttpVersion::Http1 => Protocol::Http1,
-                HttpVersion::Http2 => Protocol::Http2,
-                HttpVersion::Http3 => Protocol::Http3,
+                // HttpVersion::Http2 => Protocol::Http2,
+                // HttpVersion::Http3 => Protocol::Http3,
             },
             status: Some(status),
             headers: Some(headers),
             body: Some(body),
-            metadata: None,
             version: format!("{}", version_to_string(version)),
             ip: ip,
             duration: duration,
