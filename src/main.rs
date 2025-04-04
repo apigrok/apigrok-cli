@@ -2,8 +2,10 @@ mod protocols;
 
 use std::error::Error;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 use protocols::{ApiProtocol, ApiResponse, Protocol};
+use std::io;
 
 #[derive(Parser)]
 #[command(name = "apigrok")]
@@ -15,6 +17,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Fetch the content available at a specified url
     Fetch {
         url: String,
 
@@ -27,6 +30,11 @@ enum Commands {
 
         #[arg(short('v'), long("verbose"))]
         verbose: bool,
+    },
+    /// Generate autocompletion scripts for various shells
+    Completion {
+        /// The shell for which autocompletion should be generated (e.g. bash)
+        shell: Shell,
     },
 }
 
@@ -51,6 +59,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let response = client.fetch(&url).await?;
 
             display_response(&response, &format, verbose)?;
+        }
+        Commands::Completion { shell } => {
+            let command = &mut Cli::command();
+            generate(
+                shell,
+                command,
+                command.get_name().to_string(),
+                &mut io::stdout(),
+            );
         }
     }
 
