@@ -27,12 +27,9 @@ enum Commands {
         /// Output format (json, table)
         #[arg(short, long, default_value = "json")]
         format: String,
-    },
-    Analyze {
-        input: String,
 
-        #[arg(short, long, value_enum)]
-        protocol: Option<Protocol>,
+        #[arg(short('v'), long("verbose"))]
+        verbose: bool,
     },
     /// Generate autocompletion scripts for various shells
     Completion {
@@ -50,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             url,
             protocol,
             format,
+            verbose,
         } => {
             let client = match protocol {
                 Protocol::Http1 => Box::new(protocols::http::HttpClient {
@@ -59,12 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let response = client.fetch(&url).await?;
-            display_response(&response, &format)?;
+
+            display_response(&response, &format, verbose)?;
         }
-        Commands::Analyze {
-            input: _,
-            protocol: _,
-        } => {}
         Commands::Completion { shell } => {
             let command = &mut Cli::command();
             generate(
@@ -79,7 +74,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn display_response(response: &ApiResponse, format: &str) -> Result<(), Box<dyn Error>> {
+fn display_response(
+    response: &ApiResponse,
+    format: &str,
+    verbose: bool,
+) -> Result<(), Box<dyn Error>> {
+    if verbose {
+        // TODO: Show resolved IP (requires DNS lookup)
+        //let host = response..url().host_str().unwrap_or("unknown");
+        let ip = response
+            .ip
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        println!("* Connected to {} ({})", "unknown", ip);
+        println!("* HTTP Version: {}", response.version);
+        println!("* Request took: {:?}", response.duration);
+
+        println!("> GET {} {}", response.path, response.version);
+        // TODO:
+        // for (key, value) in response.request.headers {
+        //     println!("> {}: {:?}", key, value);
+        // }
+        println!(">");
+
+        let status = response.status.unwrap_or_else(|| 0);
+        println!("< {} {}", response.version, status);
+        if let Some(header_vec) = &response.headers {
+            for (name, value) in header_vec {
+                println!("{} {}: {}", "<", name, value);
+            }
+        }
+
+        println!("<");
+    }
+
     match format {
         "json" => {
             println!("{}", serde_json::to_string(&response.display_body())?);
@@ -91,5 +120,6 @@ fn display_response(response: &ApiResponse, format: &str) -> Result<(), Box<dyn 
             }
         }
     }
+
     Ok(())
 }
