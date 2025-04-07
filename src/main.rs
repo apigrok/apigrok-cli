@@ -1,13 +1,15 @@
 mod protocols;
 
-use std::collections::HashSet;
-use std::error::Error;
-
 use crate::protocols::ApiRequest;
+use ansi_term::Color::{Cyan, Yellow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use protocols::{ApiProtocol, ApiResponse, Protocol};
+use std::collections::HashSet;
+use std::error::Error;
+use std::fmt::Debug;
 use std::io;
+use std::io::{IsTerminal, Write};
 
 #[derive(Parser)]
 #[command(name = "apigrok")]
@@ -115,10 +117,15 @@ fn render_response(
     verbosity: Verbosity,
     verbose_detail: HashSet<VerboseDetail>,
 ) -> Result<(), Box<dyn Error>> {
+    let mut stdout = io::stdout();
+
     if matches!(verbosity, Verbosity::Debug | Verbosity::Verbose) {
         if verbose_detail.contains(&VerboseDetail::All)
             | verbose_detail.contains(&VerboseDetail::RequestDetails)
         {
+            if stdout.is_terminal() {
+                write!(stdout, "{}", Yellow.prefix())?;
+            }
             println!("> {} {} {}", request.method, request.path, request.version);
 
             if let Some(header_vec) = &request.headers {
@@ -126,11 +133,19 @@ fn render_response(
                     println!("{} {}: {}", ">", name, value);
                 }
             }
+
+            if stdout.is_terminal() {
+                write!(stdout, "{}", Yellow.suffix())?;
+            }
         }
 
         if verbose_detail.contains(&VerboseDetail::All)
             | verbose_detail.contains(&VerboseDetail::ResponseDetails)
         {
+            if stdout.is_terminal() {
+                write!(stdout, "{}", Cyan.prefix())?;
+            }
+
             // TODO: Show resolved IP (requires DNS lookup)
             //let host = response..url().host_str().unwrap_or("unknown");
             let ip = response
@@ -151,6 +166,10 @@ fn render_response(
             }
 
             println!("<");
+
+            if stdout.is_terminal() {
+                write!(stdout, "{}", Cyan.suffix())?;
+            }
         }
     }
 
