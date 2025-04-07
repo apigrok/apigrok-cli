@@ -2,7 +2,7 @@ mod protocols;
 
 use std::error::Error;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use protocols::{ApiProtocol, ApiResponse, Protocol};
 use std::io;
@@ -24,21 +24,22 @@ enum Commands {
         #[arg(short, long, value_enum, default_value_t = Protocol::Http1)]
         protocol: Protocol,
 
-        /// Output format (json, table)
-        #[arg(short, long, default_value = "json")]
-        format: String,
-    },
-    Analyze {
-        input: String,
-
-        #[arg(short, long, value_enum)]
-        protocol: Option<Protocol>,
+        #[arg(short('v'), long, value_enum, default_value_t = Verbosity::Normal)]
+        verbosity: Verbosity,
     },
     /// Generate autocompletion scripts for various shells
     Completion {
         /// The shell for which autocompletion should be generated (e.g. bash)
         shell: Shell,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Verbosity {
+    Quiet,
+    Normal,
+    Verbose,
+    Debug,
 }
 
 #[tokio::main]
@@ -49,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Fetch {
             url,
             protocol,
-            format,
+            verbosity,
         } => {
             let client = match protocol {
                 Protocol::Http1 => Box::new(protocols::http::HttpClient {
@@ -59,12 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let response = client.fetch(&url).await?;
-            display_response(&response, &format)?;
+
+            render_response(&response, verbosity)?;
         }
-        Commands::Analyze {
-            input: _,
-            protocol: _,
-        } => {}
         Commands::Completion { shell } => {
             let command = &mut Cli::command();
             generate(
@@ -79,17 +77,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn display_response(response: &ApiResponse, format: &str) -> Result<(), Box<dyn Error>> {
-    match format {
-        "json" => {
-            println!("{}", serde_json::to_string(&response.display_body())?);
-        }
-        "table" => unimplemented!("table not yet implemented, if ever"),
-        _ => {
-            if let Some(body) = &response.body {
-                println!("{}", String::from_utf8_lossy(body));
+fn render_response(response: &ApiResponse, verbosity: Verbosity) -> Result<(), Box<dyn Error>> {
+    if matches!(verbosity, Verbosity::Debug | Verbosity::Verbose) {
+        // TODO: Show resolved IP (requires DNS lookup)
+        //let host = response..url().host_str().unwrap_or("unknown");
+        let ip = response
+            .ip
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        println!("* Connected to {} ({})", "unknown", ip);
+        println!("* HTTP Version: {}", response.version);
+        println!("* Request took: {:?}", response.duration);
+
+        println!("> GET {} {}", response.path, response.version);
+        // TODO:
+        // for (key, value) in response.request.headers {
+        //     println!("> {}: {:?}", key, value);
+        // }
+        println!(">");
+
+        let status = response.status.unwrap_or_else(|| 0);
+        println!("< {} {}", response.version, status);
+        if let Some(header_vec) = &response.headers {
+            for (name, value) in header_vec {
+                println!("{} {}: {}", "<", name, value);
             }
         }
+
+        println!("<");
     }
+
+    response.render_body();
+
     Ok(())
 }
