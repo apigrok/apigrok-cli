@@ -1,7 +1,9 @@
 mod protocols;
 
+use std::collections::HashSet;
 use std::error::Error;
 
+use crate::protocols::ApiRequest;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use protocols::{ApiProtocol, ApiResponse, Protocol};
@@ -21,11 +23,23 @@ enum Commands {
     Fetch {
         url: String,
 
+        /// The network protocol to be used to connect to the remote service
         #[arg(short, long, value_enum, default_value_t = Protocol::Http1)]
         protocol: Protocol,
 
-        #[arg(short('v'), long, value_enum, default_value_t = Verbosity::Normal)]
-        verbosity: Verbosity,
+        /// The volume of output to produce
+        #[arg(
+            short('v'),
+            long,
+            value_name = "VERBOSITY",
+            value_enum,
+            default_value = "normal"
+        )]
+        verbose: Verbosity,
+
+        /// Specifies which verbose sections should be included
+        #[arg(short('d'), long, value_enum, default_values = [ "all"])]
+        verbose_detail: Vec<VerboseDetail>,
     },
     /// Generate autocompletion scripts for various shells
     Completion {
@@ -42,6 +56,18 @@ enum Verbosity {
     Debug,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+enum VerboseDetail {
+    /// Include all sections appropriate for the current level of verbosity
+    All,
+
+    /// Include request details appropriate for the current level of verbosity
+    RequestDetails,
+
+    /// Include response details appropriate for the current level of verbosity
+    ResponseDetails,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -50,7 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Fetch {
             url,
             protocol,
-            verbosity,
+            verbose,
+            verbose_detail,
         } => {
             let client = match protocol {
                 Protocol::Http1 => Box::new(protocols::http::HttpClient {
@@ -59,9 +86,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => unimplemented!("Protocol not yet implemented"),
             };
 
-            let response = client.fetch(&url).await?;
+            let (request, response) = client.fetch(&url).await?;
 
-            render_response(&response, verbosity)?;
+            render_response(
+                &request,
+                &response,
+                verbose,
+                HashSet::from_iter(verbose_detail),
+            )?;
         }
         Commands::Completion { shell } => {
             let command = &mut Cli::command();
@@ -77,35 +109,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn render_response(response: &ApiResponse, verbosity: Verbosity) -> Result<(), Box<dyn Error>> {
+fn render_response(
+    request: &ApiRequest,
+    response: &ApiResponse,
+    verbosity: Verbosity,
+    verbose_detail: HashSet<VerboseDetail>,
+) -> Result<(), Box<dyn Error>> {
     if matches!(verbosity, Verbosity::Debug | Verbosity::Verbose) {
-        // TODO: Show resolved IP (requires DNS lookup)
-        //let host = response..url().host_str().unwrap_or("unknown");
-        let ip = response
-            .ip
-            .map(|addr| addr.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+        if verbose_detail.contains(&VerboseDetail::All)
+            | verbose_detail.contains(&VerboseDetail::RequestDetails)
+        {
+            println!("> {} {} {}", request.method, request.path, request.version);
 
-        println!("* Connected to {} ({})", "unknown", ip);
-        println!("* HTTP Version: {}", response.version);
-        println!("* Request took: {:?}", response.duration);
-
-        println!("> GET {} {}", response.path, response.version);
-        // TODO:
-        // for (key, value) in response.request.headers {
-        //     println!("> {}: {:?}", key, value);
-        // }
-        println!(">");
-
-        let status = response.status.unwrap_or_else(|| 0);
-        println!("< {} {}", response.version, status);
-        if let Some(header_vec) = &response.headers {
-            for (name, value) in header_vec {
-                println!("{} {}: {}", "<", name, value);
+            if let Some(header_vec) = &request.headers {
+                for (name, value) in header_vec {
+                    println!("{} {}: {}", ">", name, value);
+                }
             }
         }
 
-        println!("<");
+        if verbose_detail.contains(&VerboseDetail::All)
+            | verbose_detail.contains(&VerboseDetail::ResponseDetails)
+        {
+            // TODO: Show resolved IP (requires DNS lookup)
+            //let host = response..url().host_str().unwrap_or("unknown");
+            let ip = response
+                .ip
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            println!("* Connected to {} ({})", "unknown", ip);
+            println!("* HTTP Version: {}", response.version);
+            println!("* Request took: {:?}", response.duration);
+
+            let status = response.status.unwrap_or_else(|| 0);
+            println!("< {} {} {}", response.path, response.version, status);
+            if let Some(header_vec) = &response.headers {
+                for (name, value) in header_vec {
+                    println!("{} {}: {}", "<", name, value);
+                }
+            }
+
+            println!("<");
+        }
     }
 
     response.render_body();

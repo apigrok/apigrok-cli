@@ -7,9 +7,8 @@ use base64::{Engine, engine::general_purpose};
 use clap::ValueEnum;
 use encoding_rs::{Encoding, UTF_8};
 use mime::Mime;
-use reqwest::Version;
 use serde::{Deserialize, Serialize};
-use std::{error::Error, net::SocketAddr};
+use std::net::SocketAddr;
 
 #[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
 pub enum Protocol {
@@ -22,7 +21,10 @@ pub enum Protocol {
 
 #[async_trait]
 pub trait ApiProtocol {
-    async fn fetch(&self, url: &str) -> Result<ApiResponse, Box<dyn std::error::Error>>;
+    async fn fetch(
+        &self,
+        url: &str,
+    ) -> Result<(ApiRequest, ApiResponse), Box<dyn std::error::Error>>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,6 +37,14 @@ pub struct ApiResponse {
     pub version: String,
     pub ip: Option<SocketAddr>,
     pub duration: std::time::Duration,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiRequest {
+    pub headers: Option<Vec<(String, String)>>,
+    pub method: String,
+    pub path: String,
+    pub version: String,
 }
 
 impl ApiResponse {
