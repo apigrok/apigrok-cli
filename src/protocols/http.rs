@@ -1,8 +1,26 @@
+use super::*;
 use crate::protocols::{ApiProtocol, ApiRequest, ApiResponse, Protocol};
 use async_trait::async_trait;
 use reqwest::{Client, Version};
 use std::error::Error;
+use std::error::Error;
+use std::sync::Arc;
 use std::time::Instant;
+use std::vec;
+
+use http_body_util::Empty;
+use hyper::body::{Bytes, Incoming};
+use hyper::client::conn::http2;
+use hyper::{Request, Response, header};
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use rustls::RootCertStore;
+use rustls::pki_types::{CertificateDer, ServerName};
+use rustls_native_certs::load_native_certs;
+use tokio::net::TcpStream;
+use tokio_rustls::{TlsConnector, rustls::ClientConfig};
+use tokio_util::compat::TokioAsyncReadCompatExt;
+
+use crate::clients;
 
 pub struct HttpClient {
     pub version: HttpVersion,
@@ -50,7 +68,9 @@ impl ApiProtocol for HttpClient {
         let version = response.version();
         let ip = response.remote_addr();
 
-        let body = response.bytes().await?.to_vec();
+        let mut config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
 
         Ok((
             ApiRequest {
