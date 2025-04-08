@@ -119,6 +119,22 @@ fn render_response(
         if verbose_detail.contains(&VerboseDetail::All)
             | verbose_detail.contains(&VerboseDetail::RequestDetails)
         {
+            if let Some(headers) = &request.headers {
+                let remote_ip = response
+                    .remote_ip
+                    .map(|addr| addr.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                if let Some((_, host_value)) = headers
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(reqwest::header::HOST.as_str()))
+                {
+                    println!("* Connected to {} ({})", host_value, remote_ip);
+                }
+            }
+            println!("* using {}", request.version);
+            println!("* request took: {:?}", response.request_duration);
+
             println!("> {} {} {}", request.method, request.path, request.version);
 
             if let Some(header_vec) = &request.headers {
@@ -126,24 +142,14 @@ fn render_response(
                     println!("{} {}: {}", ">", name, value);
                 }
             }
+            println!(">")
         }
 
         if verbose_detail.contains(&VerboseDetail::All)
             | verbose_detail.contains(&VerboseDetail::ResponseDetails)
         {
-            // TODO: Show resolved IP (requires DNS lookup)
-            //let host = response..url().host_str().unwrap_or("unknown");
-            let ip = response
-                .ip
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            println!("* Connected to {} ({})", "unknown", ip);
-            println!("* HTTP Version: {}", response.version);
-            println!("* Request took: {:?}", response.duration);
-
             let status = response.status.unwrap_or_else(|| 0);
-            println!("< {} {} {}", response.path, response.version, status);
+            println!("< {} {}", response.version, status);
             if let Some(header_vec) = &response.headers {
                 for (name, value) in header_vec {
                     println!("{} {}: {}", "<", name, value);
