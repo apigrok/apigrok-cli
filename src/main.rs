@@ -1,7 +1,8 @@
+mod color;
 mod protocols;
 
+use crate::color::{color_output, request_output, response_output};
 use crate::protocols::ApiRequest;
-use ansi_term::Color::{Cyan, Yellow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use protocols::{ApiProtocol, ApiResponse, Protocol};
@@ -9,7 +10,6 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Debug;
 use std::io;
-use std::io::{IsTerminal, Write};
 
 #[derive(Parser)]
 #[command(name = "apigrok")]
@@ -117,59 +117,46 @@ fn render_response(
     verbosity: Verbosity,
     verbose_detail: HashSet<VerboseDetail>,
 ) -> Result<(), Box<dyn Error>> {
-    let mut stdout = io::stdout();
-
     if matches!(verbosity, Verbosity::Debug | Verbosity::Verbose) {
         if verbose_detail.contains(&VerboseDetail::All)
             | verbose_detail.contains(&VerboseDetail::RequestDetails)
         {
-            if stdout.is_terminal() {
-                write!(stdout, "{}", Yellow.prefix())?;
-            }
-            println!("> {} {} {}", request.method, request.path, request.version);
+            request_output!({
+                println!("> {} {} {}", request.method, request.path, request.version);
 
-            if let Some(header_vec) = &request.headers {
-                for (name, value) in header_vec {
-                    println!("{} {}: {}", ">", name, value);
+                if let Some(header_vec) = &request.headers {
+                    for (name, value) in header_vec {
+                        println!("{} {}: {}", ">", name, value);
+                    }
                 }
-            }
-
-            if stdout.is_terminal() {
-                write!(stdout, "{}", Yellow.suffix())?;
-            }
+            });
         }
 
         if verbose_detail.contains(&VerboseDetail::All)
             | verbose_detail.contains(&VerboseDetail::ResponseDetails)
         {
-            if stdout.is_terminal() {
-                write!(stdout, "{}", Cyan.prefix())?;
-            }
+            response_output!({
+                // TODO: Show resolved IP (requires DNS lookup)
+                //let host = response..url().host_str().unwrap_or("unknown");
+                let ip = response
+                    .ip
+                    .map(|addr| addr.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
 
-            // TODO: Show resolved IP (requires DNS lookup)
-            //let host = response..url().host_str().unwrap_or("unknown");
-            let ip = response
-                .ip
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+                println!("* Connected to {} ({})", "unknown", ip);
+                println!("* HTTP Version: {}", response.version);
+                println!("* Request took: {:?}", response.duration);
 
-            println!("* Connected to {} ({})", "unknown", ip);
-            println!("* HTTP Version: {}", response.version);
-            println!("* Request took: {:?}", response.duration);
-
-            let status = response.status.unwrap_or_else(|| 0);
-            println!("< {} {} {}", response.path, response.version, status);
-            if let Some(header_vec) = &response.headers {
-                for (name, value) in header_vec {
-                    println!("{} {}: {}", "<", name, value);
+                let status = response.status.unwrap_or_else(|| 0);
+                println!("< {} {} {}", response.path, response.version, status);
+                if let Some(header_vec) = &response.headers {
+                    for (name, value) in header_vec {
+                        println!("{} {}: {}", "<", name, value);
+                    }
                 }
-            }
 
-            println!("<");
-
-            if stdout.is_terminal() {
-                write!(stdout, "{}", Cyan.suffix())?;
-            }
+                println!("<");
+            });
         }
     }
 
