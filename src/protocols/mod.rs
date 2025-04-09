@@ -8,7 +8,9 @@ use clap::ValueEnum;
 use encoding_rs::{Encoding, UTF_8};
 use mime::Mime;
 use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 use std::net::SocketAddr;
+use url::Url;
 
 #[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
 pub enum Protocol {
@@ -27,16 +29,18 @@ pub trait ApiProtocol {
     ) -> Result<(ApiRequest, ApiResponse), Box<dyn std::error::Error>>;
 }
 
+#[serde_as]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApiResponse {
-    pub path: String,
+    #[serde_as(as = "DisplayFromStr")]
+    pub url: Url,
     pub protocol: Protocol,
     pub status: Option<u16>,
     pub headers: Option<Vec<(String, String)>>,
     pub body: Option<Vec<u8>>,
     pub version: String,
-    pub ip: Option<SocketAddr>,
-    pub duration: std::time::Duration,
+    pub remote_ip: Option<SocketAddr>,
+    pub request_duration: std::time::Duration,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
