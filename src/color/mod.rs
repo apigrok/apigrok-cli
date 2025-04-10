@@ -1,3 +1,19 @@
+macro_rules! request_output {
+    ($expression:block) => {
+        use ansi_term::Color::Yellow;
+        $crate::color::color_output!(Yellow, $expression)
+    };
+}
+pub(crate) use request_output;
+
+macro_rules! response_output {
+    ($expression:block) => {
+        use ansi_term::Color::Cyan;
+        $crate::color::color_output!(Cyan, $expression)
+    };
+}
+pub(crate) use response_output;
+
 macro_rules! color_output {
     ($color:expr, $expression:block) => {
         use io::stdout;
@@ -13,22 +29,4 @@ macro_rules! color_output {
         }
     };
 }
-
 pub(crate) use color_output;
-
-macro_rules! request_output {
-    ($expression:block) => {
-        use ansi_term::Color::Yellow;
-        color_output!(Yellow, $expression)
-    };
-}
-
-macro_rules! response_output {
-    ($expression:block) => {
-        use ansi_term::Color::Cyan;
-        color_output!(Cyan, $expression)
-    };
-}
-
-pub(crate) use request_output;
-pub(crate) use response_output;

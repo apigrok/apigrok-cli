@@ -1,7 +1,8 @@
 mod color;
 mod protocols;
 
-use crate::color::{color_output, request_output, response_output};
+use crate::color::request_output;
+use crate::color::response_output;
 use crate::protocols::ApiRequest;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
