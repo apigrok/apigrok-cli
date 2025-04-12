@@ -41,3 +41,5 @@ clap_complete = "4.5.47"
 serde = { version = "1.0", features = ["derive"] }
 encoding_rs = "0.8"
 mime = "0.3.16"
+x509-parser = "0.17.0"
+url = "2.5.4"
