@@ -9,18 +9,16 @@ use std::time::Instant;
 use std::vec;
 
 use http_body_util::Empty;
-use hyper::body::{Bytes, Incoming};
+use hyper::body::Bytes;
 use hyper::client::conn::http2;
-use hyper::{Request, Response, header};
+use hyper::{Request, header};
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use rustls::RootCertStore;
-use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::pki_types::ServerName;
 use rustls_native_certs::load_native_certs;
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsConnector, rustls::ClientConfig};
-use tokio_util::compat::TokioAsyncReadCompatExt;
-
-use crate::clients;
+use url::Url;
 
 pub struct HttpClient {
     pub version: HttpVersion,
