@@ -6,6 +6,7 @@ use std::vec;
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::client::conn::http2;
+use hyper::rt::{Read, Write};
 use hyper::{Request, header};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -24,6 +25,13 @@ pub enum HttpVersion {
     //Http2,
     //Http3,
 }
+
+// Defines a trait combination that applies equally to the TokioIo<TlsStream<TcpStream>> and TokioIo<TcpStream>
+trait Streamable: Read + Write + Unpin + Send {}
+
+// Defines a generic implementation that'll get built when we tell the compiler that we want a
+// dyn pointer to Streamable for any type that implements all those traits (normal-ish I think?)
+impl<T> Streamable for T where T: Read + Write + Unpin + Send {}
 
 #[async_trait]
 impl ApiProtocol for HttpClient {
@@ -46,110 +54,21 @@ impl ApiProtocol for HttpClient {
         println!("Socket TTL: {}", tcp.ttl()?);
         println!("Nodelay setting: {}", tcp.nodelay()?);
 
-        let server_name = ServerName::try_from(domain.clone())?;
-
-        let io = match scheme {
-            "https" => {
-                // 2. Wrap with TLS using ALP
-                let mut root_store = rustls::RootCertStore::empty();
-                for cert in load_native_certs().expect("Could not load platform certificates") {
-                    root_store.add(cert)?;
-                }
-
-                let mut tls_config =
-                    ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_root_certificates(root_store)
-                        .with_no_client_auth();
-                // Configure ALPN protocols (order matters!)
-                tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()]; // Prefer HTTP/2
-
-                let connector = TlsConnector::from(Arc::new(tls_config));
-                let mut tls = connector.connect(server_name, tcp).await?;
-
-                let (_, client_connection) = tls.get_mut();
-                // let foo = client_connection.peer_certificates();
-                match client_connection.peer_certificates() {
-                    Some(certs) => {
-                        for der_cert in certs {
-                            // These are DER-encoded bytes (https://datatracker.ietf.org/doc/html/rfc5280)
-                            let raw_cert = &der_cert.to_vec();
-                            let (_, decoded_cert) = x509_parser::parse_x509_certificate(raw_cert)?;
-
-                            println!("Certificate Version: {}", &decoded_cert.version);
-                            println!("Certificate Issuer: {}", &decoded_cert.issuer);
-                            println!("Certificate Subject: {}", &decoded_cert.subject);
-                            let cert_validity = &decoded_cert.validity;
-                            let start = &cert_validity.not_before;
-                            let end = &cert_validity.not_after;
-                            println!("Certificate Validity: From {} until {}", start, end);
-                            println!("...");
-                        }
-                    }
-                    None => {}
-                }
-
-                let (_, session) = tls.get_ref();
-                if session.alpn_protocol() != Some(b"h2") {
-                    return Err("Server didn't negotiate HTTP/2".into());
-                }
-
-                let (mut sender, conn) = http2::Builder::new(TokioExecutor::new())
-                    .initial_stream_window_size(65535)
-                    .initial_connection_window_size(1_048_576)
-                    .max_frame_size(16_384) // Common server-friendly size
-                    .handshake(TokioIo::new(tls))
-                    .await?;
-
-                // 5. Spawn connection driver
-                tokio::spawn(async move {
-                    if let Err(err) = conn.await {
-                        eprintln!("Connection failed: {:?}", err);
-                    }
-                });
-
-                // 6. Send HTTP/2 request
-                let req: Request<Empty<Bytes>> = Request::builder()
-                    .uri(format!("{}://{}", scheme, domain.clone()))
-                    .header(header::HOST, parsed_url.domain().unwrap_or_default())
-                    .header(header::USER_AGENT, "my-client/0.1.0")
-                    .header(header::ACCEPT, "*/*")
-                    .body(Empty::new())?;
-
-                let res = sender.send_request(req).await?;
-
-                println!("Status: {}", res.status())
-            }
+        let io: Option<Box<dyn Streamable>> = match scheme {
+            "https" => wrap_stream_with_tls(tcp, &domain).await?,
             "http" => {
-                let (mut sender, conn) = http2::Builder::new(TokioExecutor::new())
-                    .initial_stream_window_size(65535)
-                    .initial_connection_window_size(1_048_576)
-                    .max_frame_size(16_384)
-                    .handshake(TokioIo::new(tcp))
-                    .await?;
-
-                tokio::spawn(async move {
-                    if let Err(err) = conn.await {
-                        eprintln!("Connection failed: {:?}", err);
-                    }
-                });
-
-                println!("{}", format!("{}://{}", scheme, domain.clone()));
-
-                let req: Request<Empty<Bytes>> = Request::builder()
-                    .uri(format!("{}://{}", scheme, domain.clone()))
-                    .header(header::HOST, parsed_url.domain().unwrap_or_default())
-                    .header(header::USER_AGENT, "my-client/0.1.0")
-                    .header(header::ACCEPT, "*/*")
-                    .body(Empty::new())?;
-
-                let res = sender.send_request(req).await?;
-
-                println!("Status: {}", res.status())
+                let tokio_io = TokioIo::new(tcp);
+                Some(Box::new(tokio_io))
             }
             _ => {
                 println!("Unsupported scheme: {}", scheme);
+                None
             }
         };
+
+        if let Some(io) = io {
+            process_stream(&parsed_url, scheme, domain, io).await?;
+        }
 
         // // Parse our URL...
         // let url = url.parse::<hyper::Uri>()?;
@@ -268,6 +187,91 @@ impl ApiProtocol for HttpClient {
         // })
         todo!();
     }
+}
+
+// Wrap with TLS using ALP
+async fn wrap_stream_with_tls(
+    tcp: TcpStream,
+    domain: &String,
+) -> Result<Option<Box<dyn Streamable>>, Box<dyn Error>> {
+    let server_name = ServerName::try_from(domain.clone())?;
+
+    let mut root_store = rustls::RootCertStore::empty();
+    for cert in load_native_certs().expect("Could not load platform certificates") {
+        root_store.add(cert)?;
+    }
+
+    let mut tls_config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    // Configure ALPN protocols (order matters!)
+    tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()]; // Prefer HTTP/2
+
+    let connector = TlsConnector::from(Arc::new(tls_config));
+    let mut tls = connector.connect(server_name, tcp).await?;
+
+    let (_, client_connection) = tls.get_mut();
+    match client_connection.peer_certificates() {
+        Some(certs) => {
+            for der_cert in certs {
+                // These are DER-encoded bytes (https://datatracker.ietf.org/doc/html/rfc5280)
+                let raw_cert = &der_cert.to_vec();
+                let (_, decoded_cert) = x509_parser::parse_x509_certificate(raw_cert)?;
+
+                println!("Certificate Version: {}", &decoded_cert.version);
+                println!("Certificate Issuer: {}", &decoded_cert.issuer);
+                println!("Certificate Subject: {}", &decoded_cert.subject);
+                let cert_validity = &decoded_cert.validity;
+                let start = &cert_validity.not_before;
+                let end = &cert_validity.not_after;
+                println!("Certificate Validity: From {} until {}", start, end);
+                println!("...");
+            }
+        }
+        None => {}
+    }
+
+    let (_, session) = tls.get_ref();
+    if session.alpn_protocol() != Some(b"h2") {
+        return Err("Server didn't negotiate HTTP/2".into());
+    }
+
+    let tokio_io = TokioIo::new(tls);
+    Ok(Some(Box::new(tokio_io)))
+}
+
+async fn process_stream(
+    parsed_url: &Url,
+    scheme: &str,
+    domain: String,
+    io: Box<dyn Streamable>,
+) -> Result<(), Box<dyn Error>> {
+    let (mut sender, conn) = http2::Builder::new(TokioExecutor::new())
+        .initial_stream_window_size(65535)
+        .initial_connection_window_size(1_048_576)
+        .max_frame_size(16_384)
+        .handshake(io)
+        .await?;
+
+    tokio::spawn(async move {
+        if let Err(err) = conn.await {
+            eprintln!("Connection failed: {:?}", err);
+        }
+    });
+
+    println!("{}", format!("{}://{}", scheme, domain.clone()));
+
+    let req: Request<Empty<Bytes>> = Request::builder()
+        .uri(format!("{}://{}", scheme, domain.clone()))
+        .header(header::HOST, parsed_url.domain().unwrap_or_default())
+        .header(header::USER_AGENT, "my-client/0.1.0")
+        .header(header::ACCEPT, "*/*")
+        .body(Empty::new())?;
+
+    let res = sender.send_request(req).await?;
+
+    println!("Status: {}", res.status());
+    Ok(())
 }
 
 fn version_to_string(version: Version) -> String {
