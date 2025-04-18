@@ -9,7 +9,7 @@ use encoding_rs::{Encoding, UTF_8};
 use mime::Mime;
 use reqwest::Version;
 use serde::{Deserialize, Serialize};
-use std::{error::Error, net::SocketAddr};
+use std::net::SocketAddr;
 
 #[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
 pub enum Protocol {

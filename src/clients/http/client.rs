@@ -1,29 +1,29 @@
-use std::time::Duration;
+// use std::time::Duration;
 
-use hyper::{HeaderMap, Request, Response};
-use hyper_util::{
-    client::legacy::{Client, connect::HttpConnector},
-    rt::TokioExecutor,
-};
-use tokio::runtime::Runtime;
+// use hyper::{HeaderMap, Request, Response};
+// use hyper_util::{
+//     client::legacy::{Client, connect::HttpConnector},
+//     rt::TokioExecutor,
+// };
+// use tokio::runtime::Runtime;
 
-pub trait BlockingHttpClient {
-    fn send(&self, req: Request<Body>) -> Result<Response<Body>, hyper::Error>;
-}
+// pub trait BlockingHttpClient {
+//     fn send(&self, req: Request<Body>) -> Result<Response<Body>, hyper::Error>;
+// }
 
-pub struct Body {}
+// pub struct Body {}
 
-#[derive(Clone, Debug)]
-pub struct ClientConfiguration {
-    pub base_url: Option<String>,
-    pub timeout: Option<Duration>,
-    pub default_headers: Option<HeaderMap>,
-}
+// #[derive(Clone, Debug)]
+// pub struct ClientConfiguration {
+//     pub base_url: Option<String>,
+//     pub timeout: Option<Duration>,
+//     pub default_headers: Option<HeaderMap>,
+// }
 
-pub struct BlockingClient {
-    client: Client<HttpConnector, Body>,
-    rt: Runtime,
-}
+// pub struct BlockingClient {
+//     client: Client<HttpConnector, Body>,
+//     rt: Runtime,
+// }
 
 // impl BlockingClient {
 //     pub fn new() -> Self {
