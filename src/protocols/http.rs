@@ -8,12 +8,13 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::vec;
 
+use h2::client::{self};
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::client::conn::http2;
 use hyper::rt::{Read, Write};
 use hyper::{Request, header};
-use hyper_util::client::legacy::connect::HttpConnector;
+
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::ServerName;
 use rustls_native_certs::load_native_certs;
@@ -101,6 +102,95 @@ impl ApiProtocol for HttpClient {
             },
         ))
     }
+}
+
+async fn http1_shizzle_with_upgrade(
+    url: &str,
+    parsed_url: Url,
+    tcp: TcpStream,
+) -> Result<Option<Box<dyn Streamable>>, Box<dyn Error>> {
+    let io = TokioIo::new(tcp);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake::<_, Empty<Bytes>>(io).await?;
+
+    tokio::task::spawn(async move {
+        if let Err(err) = conn.with_upgrades().await {
+            println!("Connection failed: {:?}", err);
+        }
+    });
+
+    // probing with OPTIONS request
+    let req: Request<Empty<Bytes>> = Request::builder()
+        .uri(url)
+        .header(header::HOST, parsed_url.domain().unwrap_or_default())
+        .header(hyper::header::USER_AGENT, "apigrok/0.1.0")
+        .header(hyper::header::ACCEPT, "*/*")
+        .header(hyper::header::ACCEPT_ENCODING, "gzip")
+        .header(hyper::header::CONNECTION, "Upgrade, HTTP2-Settings")
+        .header(hyper::header::UPGRADE, "h2c")
+        .header("HTTP2-Settings", "")
+        .method(hyper::Method::OPTIONS)
+        .body(Empty::<Bytes>::new())?;
+
+    let mut response = sender.send_request(req).await?;
+
+    println!("Status 1.x: {}", response.status());
+
+    if response.status() == hyper::StatusCode::SWITCHING_PROTOCOLS {
+        println!("Upgrade accepted!");
+
+        // Access the upgraded connection:
+        if let Some(upgraded) = hyper::upgrade::on(&mut response).await.ok() {
+            // Now you have a raw Upgraded I/O stream (impl AsyncRead + AsyncWrite)
+            println!("Connection upgraded!");
+
+            // Handle your protocol (WebSocket, h2c, etc.) here
+            let io = TokioIo::new(upgraded);
+            // Now upgraded can be used directly with h2
+            let (mut h2_client, h2_connection) = client::handshake(io).await?;
+
+            tokio::spawn(async move {
+                if let Err(e) = h2_connection.await {
+                    eprintln!("h2 connection error: {:?}", e);
+                }
+            });
+
+            // probing with OPTIONS request, needs to be same as ORIGINAL upgrade request
+            let req = Request::builder()
+                .uri(url)
+                .header(header::HOST, parsed_url.domain().unwrap_or_default())
+                .header(hyper::header::USER_AGENT, "apigrok/0.1.0")
+                .header(hyper::header::ACCEPT, "*/*")
+                .header(hyper::header::ACCEPT_ENCODING, "gzip")
+                .version(http::Version::HTTP_2)
+                .method(hyper::Method::OPTIONS)
+                .body(())?;
+
+            let (response_future, _) = h2_client.send_request(req, true)?;
+            let response = response_future.await?;
+
+            println!("Status h2c: {}", response.status());
+
+            // user intended request over h2c
+            let req = Request::builder()
+                .uri(url)
+                .header(header::HOST, parsed_url.domain().unwrap_or_default())
+                .header(hyper::header::USER_AGENT, "apigrok/0.1.0")
+                .header(hyper::header::ACCEPT, "*/*")
+                .header(hyper::header::ACCEPT_ENCODING, "gzip")
+                .version(http::Version::HTTP_2)
+                .method(hyper::Method::GET)
+                .body(())?;
+
+            let (response_future, _) = h2_client.send_request(req, true)?;
+            let response = response_future.await?;
+
+            println!("Status h2c: {}", response.status());
+        } else {
+            eprintln!("Upgrade failed");
+        }
+    }
+
+    todo!();
 }
 
 // Wrap with TLS using ALP
@@ -199,3 +289,119 @@ fn version_to_string(version: Version) -> String {
     }
     .to_string()
 }
+
+// // Parse our URL...
+// let url = url.parse::<hyper::Uri>()?;
+
+// // Get the host and the port
+// let host = url.host().expect("uri has no host");
+// let port = url.port_u16().unwrap_or(80);
+
+// let address = format!("{}:{}", host, port);
+
+// // Open a TCP connection to the remote host
+// let stream1 = TcpStream::connect(address.clone()).await?;
+
+// // Use an adapter to access something implementing `tokio::io` traits as if they implement
+// // `hyper::rt` IO traits.
+// let io1 = TokioIo::new(stream1);
+
+// // Create the Hyper client
+// let (mut sender1, conn1) = hyper::client::conn::http1::handshake(io1).await?;
+
+// let stream2 = TcpStream::connect(address).await?;
+// let io2 = TokioIo::new(stream2);
+// let exec = TokioExecutor::new(); // used to spawn internal tasks
+// let (mut sender2, conn2) =
+//     hyper::client::conn::http2::handshake::<_, _, http_body_util::Empty<Bytes>>(exec, io2)
+//         .await?;
+
+// // Spawn a task to poll the connection, driving the HTTP state
+// tokio::task::spawn(async move {
+//     if let Err(err) = conn1.await {
+//         println!("Connection failed: {:?}", err);
+//     }
+// });
+
+// // Spawn a task to poll the connection, driving the HTTP state
+// tokio::task::spawn(async move {
+//     if let Err(err) = conn2.await {
+//         println!("Connection failed: {:?}", err);
+//     }
+// });
+
+// let authority = url.authority().unwrap().clone();
+
+// // Create an HTTP request with an empty body and a HOST header
+// let req: Request<Empty<Bytes>> = Request::builder()
+//     .uri(url)
+//     .header(hyper::header::HOST, authority.as_str())
+//     .header(hyper::header::USER_AGENT, "apigrok/0.1.0")
+//     .header(hyper::header::ACCEPT, "*/*")
+//     .header(hyper::header::ACCEPT_ENCODING, "gzip")
+//     .body(Empty::<Bytes>::new())?;
+
+// let ret = sender2.send_request(req.clone()).await?;
+
+// println!("GAUYYY: {:?}", ret.headers());
+
+// Await the response...
+// let mut res = sender1.send_request(req).await?;
+
+// println!("Response status: {}", res.status());
+// println!("Response headers: {:?}", res.headers());
+// println!("Response version: {:?}", res.version());
+// println!("Response extensions: {:?}", res.extensions());
+
+// // Stream the body, writing each frame to stdout as it arrives
+// while let Some(next) = res.frame().await {
+//     let frame = next?;
+//     if let Some(chunk) = frame.data_ref() {
+//         io::stdout().write_all(chunk).await?;
+//     }
+// }
+
+// let client = match self.version {
+//     HttpVersion::Http1 => Client::new(),
+// };
+
+// let start = Instant::now();
+
+// let uri = Uri::from_str(url)?;
+// let req = Request::builder()
+//     .method("GET")
+//     .uri(uri.clone())
+//     .header("HOST", "localhost")
+//     .header("ACCEPT", "application/json");
+
+// Send the request
+// let res = client.request(req).await?;
+
+// let response = client.get(url).send().await?;
+// let path = response.url().path().to_string();
+// let duration = start.elapsed();
+// let status = response.status().as_u16();
+// let headers = response
+//     .headers()
+//     .iter()
+//     .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+//     .collect();
+// let version = response.version();
+// let ip = response.remote_addr();
+
+// let body = response.bytes().await?.to_vec();
+
+// Ok(ApiResponse {
+//     path: path,
+//     protocol: match self.version {
+//         HttpVersion::Http1 => Protocol::Http1,
+//         // HttpVersion::Http2 => Protocol::Http2,
+//         // HttpVersion::Http3 => Protocol::Http3,
+//     },
+//     status: Some(status),
+//     headers: Some(headers),
+//     body: Some(body),
+//     version: format!("{}", version_to_string(version)),
+//     ip: ip,
+//     duration: duration,
+// })
