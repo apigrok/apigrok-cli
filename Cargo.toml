@@ -20,12 +20,29 @@ path = "src/main.rs"
 
 [dependencies]
 async-trait = "0.1.88"
-reqwest = { version = "0.12.15", features = ["json", "blocking", "gzip"] }
+
 tokio = { version = "1.44.2", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+
+hyper = { version = "1.6.0", features = ["full"] }
+hyper-util = { version = "0.1.11", features = ["full"] }
+hyper-tls = "0.6.0"
+
+
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-native-certs = "0.8"
+
+h2 = "0.4.9"
+
+http-body = "1.0"
+http-body-util = "0.1"
 base64 = "0.22.1"
-clap = { version = "4.5.35", features = ["derive"] }
+clap = { version = "4.5.37", features = ["derive"] }
 clap_complete = "4.5.47"
 serde = { version = "1.0", features = ["derive"] }
 encoding_rs = "0.8"
 mime = "0.3.16"
 ansi_term = "0.12.1"
+x509-parser = "0.17.0"
+url = "2.5.4"

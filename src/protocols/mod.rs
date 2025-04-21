@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose};
 use clap::ValueEnum;
 use encoding_rs::{Encoding, UTF_8};
+use hyper::Method;
 use mime::Mime;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{error::Error, net::SocketAddr};
 
 #[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
 pub enum Protocol {
@@ -21,10 +22,13 @@ pub enum Protocol {
 
 #[async_trait]
 pub trait ApiProtocol {
-    async fn fetch(
+    // TODO: refactor to a builder pattern
+    async fn execute(
         &self,
+        method: Method,
         url: &str,
-    ) -> Result<(ApiRequest, ApiResponse), Box<dyn std::error::Error>>;
+        h2c: bool,
+    ) -> Result<(ApiRequest, ApiResponse), Box<dyn Error>>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
