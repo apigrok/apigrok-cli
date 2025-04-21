@@ -99,18 +99,6 @@ enum VerboseDetail {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // A[Start Request] --> B{HTTPS?}
-    // B -->|Yes| C[ALPN Negotiation]
-    // B -->|No| D[Try h2c Prior Knowledge]
-    // C -->|h2| E[Use HTTP/2]
-    // C -->|http/1.1| F[Use HTTP/1.1]
-    // D -->|Success| E
-    // D -->|Fail| F
-    // A --> G[Check Alt-Svc/DNS for HTTP/3]
-    // G -->|Supported| H[QUIC Handshake]
-    // H -->|Success| I[Use HTTP/3]
-    // H -->|Fail| C
-
     let cli = Cli::parse();
 
     match cli.command {
@@ -146,6 +134,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         None => {
+            // A[Start Request] --> B{HTTPS?}
+            // B -->|Yes| C[ALPN Negotiation]
+            // B -->|No| D[Try h2c Prior Knowledge]
+            // C -->|h2| E[Use HTTP/2]
+            // C -->|http/1.1| F[Use HTTP/1.1]
+            // D -->|Success| E
+            // D -->|Fail| F
+            // A --> G[Check Alt-Svc/DNS for HTTP/3]
+            // G -->|Supported| H[QUIC Handshake]
+            // H -->|Success| I[Use HTTP/3]
+            // H -->|Fail| C
+
             if let Some(url) = cli.url {
                 // Default: GET via HTTP/1.1
                 let client: Box<dyn ApiProtocol> = Box::new(protocols::http::HttpClient {

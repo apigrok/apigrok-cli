@@ -1,3 +1,5 @@
+use crate::clients::http::client::BlockingClient;
+
 use super::*;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr};
