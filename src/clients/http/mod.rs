@@ -6,17 +6,15 @@ use hyper::{
     body::{Bytes, Incoming},
 };
 
-pub trait BlockingHttpClient {
-    fn send(&self, req: Request<Empty<Bytes>>) -> Result<Response<Incoming>, hyper::Error>;
-}
-
-pub trait AsyncHttpClient {
-    async fn send(&self, req: Request<Empty<Bytes>>) -> Result<Response<Incoming>, hyper::Error>;
-}
+mod async_client;
+mod blocking_client;
+mod request;
+mod response;
 
 #[derive(Clone, Debug)]
 pub struct ClientConfiguration {
-    pub base_url: Option<String>,
-    pub timeout: Option<Duration>,
-    pub default_headers: Option<HeaderMap>,
+    pub timeout: Duration,
+    pub base_url: url::Url,
+    pub port: u16,
+    pub headers: Option<HeaderMap>,
 }

@@ -1,63 +1,188 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use http_body_util::Empty;
 use hyper::{
-    Request, Response,
+    HeaderMap,
     body::{Bytes, Incoming},
     client::conn,
-    header::{self, HeaderMap},
+    header::{ACCEPT, ACCEPT_ENCODING, HOST, HeaderName, HeaderValue, USER_AGENT},
 };
 
 use hyper_util::rt::TokioIo;
 use tokio::{net::TcpStream, runtime::Runtime, sync::Mutex};
 use url::Url;
 
-use crate::protocols::ApiRequest;
+use crate::clients::http::ClientConfiguration;
 
-pub struct BlockingClient {
+use super::{request::Request, response::Response};
+
+pub struct Client {
     sender: Arc<Mutex<conn::http1::SendRequest<Empty<Bytes>>>>,
     rt: Runtime,
     config: ClientConfiguration,
 }
 
-impl BlockingClient {
-    pub fn new(
-        domain: &str,
-        port: u16,
-        config: ClientConfiguration,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let rt = Runtime::new().expect("Failed to create Tokio runtime");
+pub struct ClientBuilder {
+    http1_only: bool,
+    base_url: Option<Url>,
+    port: u16,
+    timeout: Duration,
+    headers: HeaderMap,
+}
 
-        let sender = rt.block_on(async {
-            let tcp = TcpStream::connect((domain, port)).await?;
-            let io = TokioIo::new(tcp);
+impl Client {
+    pub fn builder() -> ClientBuilder {
+        ClientBuilder {
+            http1_only: false, // default
+            base_url: None,
+            port: 80,
+            timeout: Duration::from_secs(10),
+            headers: HeaderMap::new(),
+        }
+    }
 
-            let (sender, conn) = conn::http1::handshake::<_, Empty<Bytes>>(io).await?;
+    pub fn get(&self, path: &str) -> RequestBuilder {
+        let full_url = join_base_and_path(self.config.base_url.as_str(), path);
 
-            tokio::spawn(async move {
-                if let Err(err) = conn.await {
-                    eprintln!("Connection task failed: {:?}", err);
-                }
-            });
+        RequestBuilder {
+            url: full_url,
+            method: hyper::Method::GET,
+        }
+    }
 
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(sender)
+    pub fn execute(&self, request: Request) -> Result<Response, Box<dyn std::error::Error>> {
+        let method = request.method.clone();
+        let url = request.url.clone();
+
+        let sender = Arc::clone(&self.sender);
+        let mut http_req = build_http_request(request, self.config.clone())?; // map your internal Request to hyper::Request
+
+        let response = self.rt.block_on(async {
+            let mut locked = sender.lock().await;
+            let resp = locked.send_request(http_req).await?;
+            build_http_response(resp)
         })?;
 
-        Ok(Self {
-            sender: Arc::new(Mutex::new(sender)),
-            rt,
-            config,
+        println!("Executing {:?} {:?}", method, url);
+
+        Ok(response)
+    }
+}
+
+fn join_base_and_path(base: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn build_http_request(
+    request: Request,
+    config: ClientConfiguration,
+) -> Result<hyper::Request<Empty<Bytes>>, Box<dyn std::error::Error>> {
+    let original_headers = request.headers;
+
+    let mut builder = hyper::Request::builder()
+        .uri(&request.url)
+        .method(&request.method);
+
+    if let Some(headers) = original_headers {
+        for (key, value) in headers.iter() {
+            builder = builder.header(key, value.clone());
+        }
+    }
+
+    // add default agent header
+    let default_user_agent = format!("apigrok/{}", env!("CARGO_PKG_VERSION"));
+    // add default host header
+    let host = config.base_url.host_str().expect("URL must have a host");
+    let default_host = format!("{}:{}", host, config.port);
+    builder = builder
+        .header(USER_AGENT, default_user_agent.clone())
+        .header(HOST, default_host);
+
+    Ok(builder.body(Empty::new())?)
+}
+
+fn build_http_response(
+    res: hyper::Response<Incoming>,
+) -> Result<Response, Box<dyn std::error::Error>> {
+    let builder = Response {
+        status: res.status(),
+    };
+
+    Ok(builder)
+}
+
+pub struct RequestBuilder {
+    url: String,
+    method: hyper::Method,
+}
+
+impl RequestBuilder {
+    pub fn build(self) -> Result<Request, Box<dyn std::error::Error>> {
+        Ok(Request {
+            url: self.url,
+            method: self.method,
+            headers: None,
         })
     }
 }
 
-impl BlockingHttpClient for BlockingClient {
-    fn send(&self, req: Request<Empty<Bytes>>) -> Result<Response<Incoming>, hyper::Error> {
-        let sender = Arc::clone(&self.sender);
+impl ClientBuilder {
+    pub fn http1_only(mut self) -> Self {
+        self.http1_only = true;
+        self
+    }
+    pub fn base_url(mut self, url: impl Into<url::Url>) -> Self {
+        self.base_url = Some(url.into());
+        self
+    }
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
 
-        self.rt.block_on(async {
-            let mut sender = sender.lock().await;
-            sender.send_request(req).await
+    pub fn header(mut self, key: impl Into<HeaderName>, value: impl Into<HeaderValue>) -> Self {
+        self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn build(self) -> Result<Client, Box<dyn std::error::Error>> {
+        let base_url = self.base_url.ok_or("Missing base_url")?;
+        let port = self.port;
+
+        let rt = Runtime::new()?;
+        let host = base_url.host_str().ok_or("Invalid host")?.to_string();
+
+        let sender = rt.block_on(async {
+            let tcp = TcpStream::connect((host, port)).await?;
+            let io = TokioIo::new(tcp);
+
+            let (sender, connection) = conn::http1::handshake(io).await?;
+            tokio::spawn(async move {
+                if let Err(e) = connection.await {
+                    eprintln!("connection failed: {:?}", e);
+                }
+            });
+
+            Ok::<_, Box<dyn std::error::Error>>(sender)
+        })?;
+
+        Ok(Client {
+            sender: Arc::new(Mutex::new(sender)),
+            rt,
+            config: ClientConfiguration {
+                timeout: self.timeout,
+                headers: Some(self.headers),
+                base_url,
+                port,
+            },
         })
     }
 }
@@ -66,30 +191,20 @@ impl BlockingHttpClient for BlockingClient {
 fn test_blocking_client() -> Result<(), Box<dyn std::error::Error>> {
     let parsed_url = Url::parse("http://myrstack.tech")?;
     let scheme = parsed_url.scheme();
-    let host = parsed_url.host_str().ok_or("Invalid host")?;
-    let domain = parsed_url.domain().ok_or("Invalid domain")?.to_string();
     let port = parsed_url
         .port_or_known_default()
         .unwrap_or_else(|| if scheme == "https" { 443 } else { 80 });
 
-    let config = ClientConfiguration {
-        base_url: Some(parsed_url.to_string()),
-        timeout: Some(Duration::from_secs(10)),
-        default_headers: Some(HeaderMap::new()),
-    };
+    let client = Client::builder()
+        .base_url(parsed_url)
+        .port(port)
+        .header(ACCEPT, HeaderValue::from_static("*/*"))
+        .build()?;
+    let request = client.get("/").build()?;
 
-    let client = BlockingClient::new(&domain, port, config).unwrap();
-    let req: Request<Empty<Bytes>> = Request::builder()
-        .uri(parsed_url.as_str())
-        .header(header::HOST, host)
-        .header(hyper::header::USER_AGENT, "apigrok/0.1.0")
-        .header(hyper::header::ACCEPT, "*/*")
-        .header(hyper::header::ACCEPT_ENCODING, "gzip")
-        .method(hyper::Method::GET)
-        .body(Empty::<Bytes>::new())?;
+    let res = client.execute(request).unwrap();
 
-    let res: Response<Incoming> = client.send(req).unwrap();
-    assert_eq!(res.status(), 301);
+    assert_eq!(res.status, 301);
 
     Ok(())
 }
