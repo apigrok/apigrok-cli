@@ -1,5 +1,3 @@
-use crate::clients::http::client::BlockingClient;
-
 use super::*;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr};
@@ -12,7 +10,7 @@ use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::client::conn::http2;
 use hyper::rt::{Read, Write};
-use hyper::{Request, Version, header};
+use hyper::{HeaderMap, Request, Version, header};
 
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::ServerName;
@@ -54,8 +52,8 @@ impl ApiProtocol for HttpClient {
             .port_or_known_default()
             .unwrap_or_else(|| if scheme == "https" { 443 } else { 80 });
 
-        // TODO: use our own client
-        //BlockingClient::new(domain, port, config)
+        // TODO: use our own client, can't use blocking due to async main
+        // BlockingClient::new(domain, port, config)
 
         // 1. Open TCP connection
         let tcp = TcpStream::connect((domain.clone(), port)).await?;
