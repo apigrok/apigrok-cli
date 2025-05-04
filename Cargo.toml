@@ -46,3 +46,6 @@ mime = "0.3.16"
 ansi_term = "0.12.1"
 x509-parser = "0.17.0"
 url = "2.5.4"
+
+[dev-dependencies]
+async-std = "1.12"

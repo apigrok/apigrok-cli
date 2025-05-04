@@ -1,3 +1,5 @@
+use crate::clients::{self, http};
+
 use super::*;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr};
@@ -9,6 +11,7 @@ use h2::client::{self};
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::client::conn::http2;
+use hyper::header::HeaderValue;
 use hyper::rt::{Read, Write};
 use hyper::{HeaderMap, Request, Version, header};
 
@@ -52,9 +55,6 @@ impl ApiProtocol for HttpClient {
             .port_or_known_default()
             .unwrap_or_else(|| if scheme == "https" { 443 } else { 80 });
 
-        // TODO: use our own client, can't use blocking due to async main
-        // BlockingClient::new(domain, port, config)
-
         // 1. Open TCP connection
         let tcp = TcpStream::connect((domain.clone(), port)).await?;
         println!("Connected to {}:{} via {}", host, port, scheme);
@@ -65,11 +65,22 @@ impl ApiProtocol for HttpClient {
         println!("Socket TTL: {}", tcp.ttl()?);
         println!("Nodelay setting: {}", tcp.nodelay()?);
 
-        if h2c {
-            http1_shizzle_with_upgrade(method, url, parsed_url, tcp).await?;
-        } else {
-            http1_shizzle(method, url, parsed_url, tcp).await?;
-        }
+        let client = http::async_client::Client::builder()
+            .base_url(parsed_url.clone())
+            .port(port)
+            .http1_only()
+            .build()
+            .await?;
+        let request = client.get("/").build()?;
+        let res = client.execute(request).await?;
+
+        println!("Async client gave this http code: {}", res.status);
+
+        // if h2c {
+        //     http1_shizzle_with_upgrade(method, url, parsed_url, tcp).await?;
+        // } else {
+        //     http1_shizzle(method, url, parsed_url, tcp).await?;
+        // }
         // let io: Option<Box<dyn Streamable>> = match scheme {
         //     "https" => wrap_stream_with_tls(tcp, &domain).await?,
         //     "http" => {
@@ -203,7 +214,7 @@ async fn http1_shizzle_with_upgrade(
                 .header(hyper::header::USER_AGENT, "apigrok/0.1.0")
                 .header(hyper::header::ACCEPT, "*/*")
                 .header(hyper::header::ACCEPT_ENCODING, "gzip")
-                .version(http::Version::HTTP_2)
+                .version(hyper::http::Version::HTTP_2)
                 .method(hyper::Method::OPTIONS)
                 .body(())?;
 
@@ -219,7 +230,7 @@ async fn http1_shizzle_with_upgrade(
                 .header(hyper::header::USER_AGENT, "apigrok/0.1.0")
                 .header(hyper::header::ACCEPT, "*/*")
                 .header(hyper::header::ACCEPT_ENCODING, "gzip")
-                .version(http::Version::HTTP_2)
+                .version(hyper::http::Version::HTTP_2)
                 .method(method)
                 .body(())?;
 

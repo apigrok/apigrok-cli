@@ -8,7 +8,7 @@ use crate::protocols::ApiRequest;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use hyper::Method;
-use protocols::{ApiProtocol, ApiResponse, Protocol};
+use protocols::{ApiProtocol, ApiResponse};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Debug;
@@ -145,6 +145,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // G -->|Supported| H[QUIC Handshake]
             // H -->|Success| I[Use HTTP/3]
             // H -->|Fail| C
+
+            /*
+               main -> http, grpc, websockets?
+                   http -> http, https?
+                       http -> 1.1, h2c
+                       https -> 1.1, h2, h3
+
+                    grpc -> http, https
+                        http ->
+
+
+
+            */
 
             if let Some(url) = cli.url {
                 // Default: GET via HTTP/1.1
