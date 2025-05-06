@@ -1,11 +1,11 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use http_body_util::Empty;
 use hyper::{
     HeaderMap,
     body::{Bytes, Incoming},
     client::conn,
-    header::{ACCEPT, ACCEPT_ENCODING, HOST, HeaderName, HeaderValue, USER_AGENT},
+    header::{HeaderName, HeaderValue},
 };
 
 use hyper_util::rt::TokioIo;
@@ -15,6 +15,12 @@ use url::Url;
 use crate::clients::http::ClientConfiguration;
 
 use super::{request::Request, response::Response};
+
+// impl BlockingHttpClient for Client {}
+
+pub trait BlockingHttpClient {
+    async fn send(&self, req: Request) -> Result<Response, hyper::Error>;
+}
 
 pub struct Client {
     sender: Arc<Mutex<conn::http1::SendRequest<Empty<Bytes>>>>,
@@ -55,7 +61,7 @@ impl Client {
         let url = request.url.clone();
 
         let sender = Arc::clone(&self.sender);
-        let mut http_req = build_http_request(request, self.config.clone())?; // map your internal Request to hyper::Request
+        let http_req = build_http_request(request, self.config.clone())?; // map your internal Request to hyper::Request
 
         let response = self.rt.block_on(async {
             let mut locked = sender.lock().await;
@@ -99,8 +105,8 @@ fn build_http_request(
     let host = config.base_url.host_str().expect("URL must have a host");
     let default_host = format!("{}:{}", host, config.port);
     builder = builder
-        .header(USER_AGENT, default_user_agent.clone())
-        .header(HOST, default_host);
+        .header(hyper::header::USER_AGENT, default_user_agent.clone())
+        .header(hyper::header::HOST, default_host);
 
     Ok(builder.body(Empty::new())?)
 }
@@ -198,7 +204,7 @@ fn test_blocking_client() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::builder()
         .base_url(parsed_url)
         .port(port)
-        .header(ACCEPT, HeaderValue::from_static("*/*"))
+        .header(hyper::header::ACCEPT, HeaderValue::from_static("*/*"))
         .build()?;
     let request = client.get("/").build()?;
 
