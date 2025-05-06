@@ -19,33 +19,33 @@ name = "apigrok"
 path = "src/main.rs"
 
 [dependencies]
-async-trait = "0.1.88"
+async-trait = "0.1"
 
-tokio = { version = "1.44.2", features = ["full"] }
-tokio-util = { version = "0.7.15", features = ["compat"] }
+tokio = { version = "1.45", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
 
-hyper = { version = "1.6.0", features = ["full"] }
-hyper-util = { version = "0.1.11", features = ["full"] }
-hyper-tls = "0.6.0"
+hyper = { version = "1.6", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+hyper-tls = "0.6"
 
 
 tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-native-certs = "0.8"
 
-h2 = "0.4.10"
+h2 = "0.4"
 
 http-body = "1.0"
 http-body-util = "0.1"
-base64 = "0.22.1"
-clap = { version = "4.5.37", features = ["derive"] }
-clap_complete = "4.5.48"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
 serde = { version = "1.0", features = ["derive"] }
 encoding_rs = "0.8"
-mime = "0.3.16"
-ansi_term = "0.12.1"
-x509-parser = "0.17.0"
-url = "2.5.4"
+mime = "0.3"
+ansi_term = "0.12"
+x509-parser = "0.17"
+url = "2.5"
 
 [dev-dependencies]
 async-std = "1.12"
