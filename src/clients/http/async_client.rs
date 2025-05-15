@@ -8,11 +8,15 @@ use hyper::{
     header::{HeaderName, HeaderValue},
 };
 
+use hyper_tls::HttpsConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use rustls::{ClientConfig, pki_types::ServerName};
+use rustls::{
+    ClientConfig, RootCertStore,
+    pki_types::{DnsName, ServerName},
+};
 use rustls_native_certs::load_native_certs;
 use tokio::{net::TcpStream, sync::Mutex};
-use tokio_rustls::TlsConnector;
+use tokio_rustls::{TlsConnector, client::TlsStream};
 use url::Url;
 
 use crate::clients::http::ClientConfiguration;
@@ -159,7 +163,6 @@ impl ClientBuilder {
         self.timeout = timeout;
         self
     }
-
     pub fn header(mut self, key: impl Into<HeaderName>, value: impl Into<HeaderValue>) -> Self {
         self.headers.insert(key.into(), value.into());
         self
@@ -170,78 +173,86 @@ impl ClientBuilder {
         let port = self.port;
         let host = base_url.host_str().ok_or("Invalid host")?.to_string();
         let domain = base_url.domain().ok_or("Invalid domain")?.to_string();
+        let scheme = base_url.scheme().to_string();
+        let addr = format!("{}:{}", host, port);
 
-        let tcp = TcpStream::connect((host.as_str(), port)).await?;
-
-        let use_http2 = !self.http1_only;
-        let sender = if use_http2 {
-            let server_name = ServerName::try_from(domain.clone())?;
-
-            let mut root_store = rustls::RootCertStore::empty();
-            for cert in load_native_certs().expect("Could not load platform certificates") {
-                root_store.add(cert)?;
+        // G: Check Alt-Svc/DNS for HTTP/3 (stubbed)
+        let http3_supported = false;
+        if http3_supported {
+            let quic_success = false;
+            if quic_success {
+                println!("[I] Use HTTP/3");
+                unimplemented!("HTTP/3 not implemented in this example");
             }
+        }
 
-            let mut tls_config =
-                ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .with_root_certificates(root_store)
-                    .with_no_client_auth();
-            // Configure ALPN protocols (order matters!)
-            tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()]; // Prefer HTTP/2
+        let sender = match scheme.as_str() {
+            "https" => {
+                // HTTPS with ALPN negotiation
+                let mut root_store = rustls::RootCertStore::empty();
+                for cert in load_native_certs().expect("Could not load platform certificates") {
+                    root_store.add(cert)?;
+                }
 
-            let connector = TlsConnector::from(Arc::new(tls_config));
-            let mut tls = connector.connect(server_name, tcp).await?;
+                let mut tls_config =
+                    ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                        .with_root_certificates(root_store)
+                        .with_no_client_auth();
+                // Configure ALPN protocols (order matters!)
+                tls_config.alpn_protocols = vec![
+                    b"h2".to_vec(),
+                    b"http/1.3".to_vec(),
+                    b"http/1.2".to_vec(),
+                    b"http/1.1".to_vec(),
+                ]; // Prefer HTTP/2
 
-            let (_, client_connection) = tls.get_mut();
-            match client_connection.peer_certificates() {
-                Some(certs) => {
-                    for der_cert in certs {
-                        // These are DER-encoded bytes (https://datatracker.ietf.org/doc/html/rfc5280)
-                        let raw_cert = &der_cert.to_vec();
-                        let (_, decoded_cert) = x509_parser::parse_x509_certificate(raw_cert)?;
+                let connector = TlsConnector::from(Arc::new(tls_config));
+                let tcp = TcpStream::connect(&addr).await?;
 
-                        println!("Certificate Version: {}", &decoded_cert.version);
-                        println!("Certificate Issuer: {}", &decoded_cert.issuer);
-                        println!("Certificate Subject: {}", &decoded_cert.subject);
-                        let cert_validity = &decoded_cert.validity;
-                        let start = &cert_validity.not_before;
-                        let end = &cert_validity.not_after;
-                        println!("Certificate Validity: From {} until {}", start, end);
-                        println!("...");
+                let server_name = ServerName::try_from(domain.clone())?;
+                let tls = connector.connect(server_name, tcp).await?;
+                let negotiated = tls.get_ref().1.alpn_protocol().map(|proto| proto.to_vec());
+                let io = TokioIo::new(tls);
+
+                match negotiated.as_deref() {
+                    Some(b"h2") => {
+                        let (sender, conn) = conn::http2::Builder::new(TokioExecutor::new())
+                            .initial_stream_window_size(65535)
+                            .initial_connection_window_size(1_048_576)
+                            .max_frame_size(16_384)
+                            .handshake(io)
+                            .await?;
+                        tokio::spawn(async move {
+                            if let Err(e) = conn.await {
+                                eprintln!("HTTP/2 connection error: {:?}", e);
+                            }
+                        });
+                        SendRequestClient::Http2(sender)
+                    }
+                    _ => {
+                        let (sender, conn) = conn::http1::handshake(io).await?;
+                        tokio::spawn(async move {
+                            if let Err(e) = conn.await {
+                                eprintln!("HTTP/1.1 connection error: {:?}", e);
+                            }
+                        });
+                        SendRequestClient::Http1(sender)
                     }
                 }
-                None => {}
             }
-
-            let (_, session) = tls.get_ref();
-            if session.alpn_protocol() != Some(b"h2") {
-                return Err("Server didn't negotiate HTTP/2".into());
+            "http" => {
+                // TODO: Try h2c with prior knowledge and upgrade support
+                let tcp = TcpStream::connect(&addr).await?;
+                let io = TokioIo::new(tcp);
+                let (sender, conn) = conn::http1::handshake(io).await?;
+                tokio::spawn(async move {
+                    if let Err(e) = conn.await {
+                        eprintln!("HTTP/1.1 connection error: {:?}", e);
+                    }
+                });
+                SendRequestClient::Http1(sender)
             }
-
-            let tokio_io = TokioIo::new(tls);
-
-            let (mut sender, conn) = conn::http2::Builder::new(TokioExecutor::new())
-                .initial_stream_window_size(65535)
-                .initial_connection_window_size(1_048_576)
-                .max_frame_size(16_384)
-                .handshake(tokio_io)
-                .await?;
-
-            tokio::spawn(async move {
-                if let Err(e) = conn.await {
-                    eprintln!("HTTP/2 connection failed: {:?}", e);
-                }
-            });
-            SendRequestClient::Http2(sender)
-        } else {
-            let tokio_io = TokioIo::new(tcp);
-            let (sender, conn) = conn::http1::handshake(tokio_io).await?;
-            tokio::spawn(async move {
-                if let Err(e) = conn.await {
-                    eprintln!("HTTP/1 connection failed: {:?}", e);
-                }
-            });
-            SendRequestClient::Http1(sender)
+            _ => return Err("Unsupported scheme".into()),
         };
 
         Ok(Client {

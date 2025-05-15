@@ -1,4 +1,4 @@
-use crate::clients::{self, http};
+use crate::clients::{grpc, http};
 
 use super::*;
 use std::error::Error;
@@ -11,9 +11,8 @@ use h2::client::{self};
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::client::conn::http2;
-use hyper::header::HeaderValue;
 use hyper::rt::{Read, Write};
-use hyper::{HeaderMap, Request, Version, header};
+use hyper::{Request, Version, header};
 
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::ServerName;
@@ -65,13 +64,18 @@ impl ApiProtocol for HttpClient {
         println!("Socket TTL: {}", tcp.ttl()?);
         println!("Nodelay setting: {}", tcp.nodelay()?);
 
+        // 2. Setup client & request
         let client = http::async_client::Client::builder()
             .base_url(parsed_url.clone())
             .port(port)
             .http1_only()
             .build()
             .await?;
-        let request = client.get("/").build()?;
+
+        let request = match method {
+            Method::GET => client.get("/").build()?,
+            _ => client.get("/").build()?,
+        };
         let res = client.execute(request).await?;
 
         println!("Async client gave this http code: {}", res.status);
