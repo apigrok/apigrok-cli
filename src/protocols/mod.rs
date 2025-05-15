@@ -25,7 +25,6 @@ pub trait ApiProtocol {
         &self,
         method: Method,
         url: &str,
-        h2c: bool,
     ) -> Result<(ApiRequest, ApiResponse), Box<dyn Error>>;
 }
 

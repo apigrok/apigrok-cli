@@ -8,21 +8,18 @@ use hyper::{
     header::{HeaderName, HeaderValue},
 };
 
-use hyper_tls::HttpsConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use rustls::{
-    ClientConfig, RootCertStore,
-    pki_types::{DnsName, ServerName},
-};
+use rustls::{ClientConfig, pki_types::ServerName};
 use rustls_native_certs::load_native_certs;
 use tokio::{net::TcpStream, sync::Mutex};
-use tokio_rustls::{TlsConnector, client::TlsStream};
+use tokio_rustls::TlsConnector;
 use url::Url;
 
 use crate::clients::http::ClientConfiguration;
 
 use super::{request::Request, response::Response};
 
+#[allow(unused)]
 pub trait AsyncHttpClient {
     async fn send(&self, req: Request) -> Result<Response, hyper::Error>;
 }
@@ -38,17 +35,19 @@ pub struct Client {
 }
 
 pub struct ClientBuilder {
-    http1_only: bool,
     base_url: Option<Url>,
-    port: u16,
     timeout: Duration,
     headers: HeaderMap,
+    port: u16,
+    http1_only: bool,
+    http2_prior_knowledge: bool,
 }
 
 impl Client {
     pub fn builder() -> ClientBuilder {
         ClientBuilder {
-            http1_only: false, // default
+            http1_only: false,            // default,
+            http2_prior_knowledge: false, // default,
             base_url: None,
             port: 80,
             timeout: Duration::from_secs(10),
@@ -57,12 +56,50 @@ impl Client {
     }
 
     pub fn get(&self, path: &str) -> RequestBuilder {
-        let full_url = join_base_and_path(self.config.base_url.as_str(), path);
+        self.request(hyper::Method::GET, path)
+    }
 
+    pub fn post(&self, path: &str) -> BodyRequestBuilder {
+        self.body_request(hyper::Method::POST, path)
+    }
+
+    pub fn put(&self, path: &str) -> BodyRequestBuilder {
+        self.body_request(hyper::Method::PUT, path)
+    }
+
+    pub fn delete(&self, path: &str) -> RequestBuilder {
+        self.request(hyper::Method::DELETE, path)
+    }
+
+    pub fn patch(&self, path: &str) -> BodyRequestBuilder {
+        self.body_request(hyper::Method::PATCH, path)
+    }
+
+    pub fn head(&self, path: &str) -> RequestBuilder {
+        self.request(hyper::Method::HEAD, path)
+    }
+
+    pub fn options(&self, path: &str) -> RequestBuilder {
+        self.request(hyper::Method::OPTIONS, path)
+    }
+
+    fn request(&self, method: hyper::Method, path: &str) -> RequestBuilder {
         RequestBuilder {
-            url: full_url,
-            method: hyper::Method::GET,
+            method,
+            url: self.full_url(path),
         }
+    }
+
+    fn body_request(&self, method: hyper::Method, path: &str) -> BodyRequestBuilder {
+        BodyRequestBuilder {
+            method,
+            url: self.full_url(path),
+            body: None,
+        }
+    }
+
+    fn full_url(&self, path: &str) -> String {
+        join_base_and_path(&self.config.base_url.as_str(), path)
     }
 
     pub async fn execute(&self, request: Request) -> Result<Response, Box<dyn std::error::Error>> {
@@ -136,12 +173,36 @@ pub struct RequestBuilder {
     method: hyper::Method,
 }
 
+pub struct BodyRequestBuilder {
+    url: String,
+    method: hyper::Method,
+    body: Option<Bytes>,
+}
+
 impl RequestBuilder {
     pub fn build(self) -> Result<Request, Box<dyn std::error::Error>> {
         Ok(Request {
             url: self.url,
             method: self.method,
             headers: None,
+            body: None, // GET requests typically do not have a body
+        })
+    }
+}
+
+impl BodyRequestBuilder {
+    pub fn body(mut self, b: Bytes) -> BodyRequestBuilder {
+        self.body = Some(b);
+
+        self
+    }
+
+    pub fn build(self) -> Result<Request, Box<dyn std::error::Error>> {
+        Ok(Request {
+            url: self.url,
+            method: self.method,
+            headers: None,
+            body: self.body,
         })
     }
 }
@@ -149,6 +210,10 @@ impl RequestBuilder {
 impl ClientBuilder {
     pub fn http1_only(mut self) -> Self {
         self.http1_only = true;
+        self
+    }
+    pub fn http2_prior_knowledge(mut self) -> Self {
+        self.http2_prior_knowledge = true;
         self
     }
     pub fn base_url(mut self, url: impl Into<url::Url>) -> Self {
@@ -159,10 +224,12 @@ impl ClientBuilder {
         self.port = port;
         self
     }
+    #[allow(unused)]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
+    #[allow(unused)]
     pub fn header(mut self, key: impl Into<HeaderName>, value: impl Into<HeaderValue>) -> Self {
         self.headers.insert(key.into(), value.into());
         self
@@ -199,12 +266,13 @@ impl ClientBuilder {
                         .with_root_certificates(root_store)
                         .with_no_client_auth();
                 // Configure ALPN protocols (order matters!)
-                tls_config.alpn_protocols = vec![
-                    b"h2".to_vec(),
-                    b"http/1.3".to_vec(),
-                    b"http/1.2".to_vec(),
-                    b"http/1.1".to_vec(),
-                ]; // Prefer HTTP/2
+                if self.http1_only {
+                    tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+                } else if self.http2_prior_knowledge {
+                    tls_config.alpn_protocols = vec![b"h2".to_vec()];
+                } else {
+                    tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+                }
 
                 let connector = TlsConnector::from(Arc::new(tls_config));
                 let tcp = TcpStream::connect(&addr).await?;
@@ -216,6 +284,8 @@ impl ClientBuilder {
 
                 match negotiated.as_deref() {
                     Some(b"h2") => {
+                        eprintln!("HTTP/2");
+
                         let (sender, conn) = conn::http2::Builder::new(TokioExecutor::new())
                             .initial_stream_window_size(65535)
                             .initial_connection_window_size(1_048_576)
@@ -230,6 +300,7 @@ impl ClientBuilder {
                         SendRequestClient::Http2(sender)
                     }
                     _ => {
+                        eprintln!("HTTP/1.1");
                         let (sender, conn) = conn::http1::handshake(io).await?;
                         tokio::spawn(async move {
                             if let Err(e) = conn.await {
@@ -241,7 +312,6 @@ impl ClientBuilder {
                 }
             }
             "http" => {
-                // TODO: Try h2c with prior knowledge and upgrade support
                 let tcp = TcpStream::connect(&addr).await?;
                 let io = TokioIo::new(tcp);
                 let (sender, conn) = conn::http1::handshake(io).await?;

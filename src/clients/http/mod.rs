@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use hyper::HeaderMap;
 
-pub mod async_client;
-mod blocking_client;
+pub mod client;
 mod request;
 mod response;
 
+#[allow(unused)]
 #[derive(Clone, Debug)]
 pub struct ClientConfiguration {
     pub timeout: Duration,
