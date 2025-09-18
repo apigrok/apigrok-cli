@@ -8,7 +8,7 @@ use crate::protocols::ApiRequest;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use hyper::Method;
-use protocols::{ApiProtocol, ApiResponse, Protocol};
+use protocols::{ApiProtocol, ApiResponse};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Debug;
@@ -44,17 +44,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Perform a request using HTTP/1.x
-    Http {
+    Http1 {
         #[arg(value_enum)]
         method: Method,
 
         url: String,
-
-        #[arg(
-            long,
-            help = "Attempt to upgrade to HTTP/2 over cleartext (h2c) after initial HTTP/1.x connection"
-        )]
-        h2c: bool,
     },
 
     /// Perform a request using HTTP/2
@@ -65,10 +59,18 @@ enum Commands {
         url: String,
     },
 
+    /// Perform a request using HTTP/3
+    Http3 {
+        #[arg(value_enum)]
+        method: Method,
+
+        url: String,
+    },
+
     /// Perform a gRPC request
     Grpc {
         #[arg(value_enum)]
-        method: Method,
+        method: String,
 
         url: String,
     },
@@ -102,13 +104,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Http { method, url, h2c }) => {
-            // http/1.x call
-
+        Some(Commands::Http1 { method, url }) => {
             let client: Box<dyn ApiProtocol> = Box::new(protocols::http::HttpClient {
-                version: protocols::http::HttpVersion::Http1,
+                version: Some(protocols::http::HttpVersion::Http1),
             });
-            let (request, response) = client.execute(method, &url, h2c).await?;
+            let (request, response) = client.execute(method, &url).await?;
 
             let _ = render_response(
                 &request,
@@ -119,8 +119,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Some(Commands::Http2 { method, url }) => {
-            // TODO: http/2 call
-            println!("Performing http2 {:?} to {}", method, url);
+            let client: Box<dyn ApiProtocol> = Box::new(protocols::http::HttpClient {
+                version: Some(protocols::http::HttpVersion::Http2),
+            });
+            let (request, response) = client.execute(method, &url).await?;
+
+            let _ = render_response(
+                &request,
+                &response,
+                cli.verbose,
+                HashSet::from_iter(cli.verbose_detail),
+            )?;
+        }
+
+        Some(Commands::Http3 { method, url }) => {
+            // TODO: grpc call
+            println!("Performing http/3 {:?} to {}", method, url);
         }
 
         Some(Commands::Grpc { method, url }) => {
@@ -139,19 +153,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // B -->|No| D[Try h2c Prior Knowledge]
             // C -->|h2| E[Use HTTP/2]
             // C -->|http/1.1| F[Use HTTP/1.1]
-            // D -->|Success| E
-            // D -->|Fail| F
-            // A --> G[Check Alt-Svc/DNS for HTTP/3]
-            // G -->|Supported| H[QUIC Handshake]
-            // H -->|Success| I[Use HTTP/3]
-            // H -->|Fail| C
-
             if let Some(url) = cli.url {
-                // Default: GET via HTTP/1.1
-                let client: Box<dyn ApiProtocol> = Box::new(protocols::http::HttpClient {
-                    version: protocols::http::HttpVersion::Http1,
-                });
-                let (request, response) = client.execute(Method::GET, &url, false).await?;
+                let client: Box<dyn ApiProtocol> =
+                    Box::new(protocols::http::HttpClient { version: None });
+                let (request, response) = client.execute(Method::GET, &url).await?;
 
                 let _ = render_response(
                     &request,
@@ -221,3 +226,26 @@ fn render_response(
 
     Ok(())
 }
+
+// A[Start Request] --> B{HTTPS?}
+// B -->|Yes| C[ALPN Negotiation]
+// B -->|No| D[Try h2c Prior Knowledge]
+// C -->|h2| E[Use HTTP/2]
+// C -->|http/1.1| F[Use HTTP/1.1]
+// D -->|Success| E
+// D -->|Fail| F
+// A --> G[Check Alt-Svc/DNS for HTTP/3]
+// G -->|Supported| H[QUIC Handshake]
+// H -->|Success| I[Use HTTP/3]
+// H -->|Fail| C
+
+/*
+   main -> http, grpc, websockets?
+       http -> http, https?
+           http -> 1.1, h2c
+           https -> 1.1, h2, h3
+
+        grpc -> http, https
+            http -> insecure
+            https -> secure
+*/
