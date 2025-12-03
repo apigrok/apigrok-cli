@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package streaming;
+
+// Streaming test service
+service StreamService {
+  // Server streaming: client sends one request, receives multiple responses
+  rpc ServerStream (StreamRequest) returns (stream StreamResponse) {}
+
+  // Client streaming: client sends multiple requests, receives one response
+  rpc ClientStream (stream StreamRequest) returns (StreamResponse) {}
+
+  // Bidirectional streaming: both send/receive streams
+  rpc Bidirectional (stream StreamRequest) returns (stream StreamResponse) {}
+
+  // Unary for comparison
+  rpc Unary (StreamRequest) returns (StreamResponse) {}
+}
+
+message StreamRequest {
+  string message = 1;
+  int32 sequence = 2;
+}
+
+message StreamResponse {
+  string reply = 1;
+  int32 sequence = 2;
+  int64 timestamp = 3;
+}
