@@ -1,251 +1,71 @@
-mod clients;
-mod color;
+mod cli;
+mod error;
 mod protocols;
+mod request;
+mod response;
+mod verbose;
 
-use crate::color::request_output;
-use crate::color::response_output;
-use crate::protocols::ApiRequest;
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::{Shell, generate};
-use hyper::Method;
-use protocols::{ApiProtocol, ApiResponse};
-use std::collections::HashSet;
-use std::error::Error;
-use std::fmt::Debug;
-use std::io;
-
-#[derive(Parser)]
-#[command(name = "apigrok")]
-#[command(about = "A CLI tool to explore and understand APIs", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-
-    /// Shortcut for GET via HTTP/1.x
-    #[arg()]
-    url: Option<String>,
-
-    /// Set the verbosity level
-    /// The volume of output to produce
-    #[arg(
-        short('v'),
-        long,
-        value_name = "VERBOSITY",
-        value_enum,
-        default_value = "normal"
-    )]
-    verbose: Verbosity,
-
-    /// Specifies which verbose sections should be included
-    #[arg(short('d'), long, value_enum, default_values = [ "all"])]
-    verbose_detail: Vec<VerboseDetail>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Perform a request using HTTP/1.x
-    Http1 {
-        #[arg(value_enum)]
-        method: Method,
-
-        url: String,
-    },
-
-    /// Perform a request using HTTP/2
-    Http2 {
-        #[arg(value_enum)]
-        method: Method,
-
-        url: String,
-    },
-
-    /// Perform a request using HTTP/3
-    Http3 {
-        #[arg(value_enum)]
-        method: Method,
-
-        url: String,
-    },
-
-    /// Perform a gRPC request
-    Grpc {
-        #[arg(value_enum)]
-        method: String,
-
-        url: String,
-    },
-
-    /// Generate autocompletion scripts
-    Completion { shell: Shell },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Verbosity {
-    Quiet,
-    Normal,
-    Verbose,
-    Debug,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
-enum VerboseDetail {
-    /// Include all sections appropriate for the current level of verbosity
-    All,
-
-    /// Include request details appropriate for the current level of verbosity
-    RequestDetails,
-
-    /// Include response details appropriate for the current level of verbosity
-    ResponseDetails,
-}
+use clap::Parser;
+use cli::{Cli, Protocol as ProtocolType};
+use colored::*;
+use error::Result;
+use protocols::{
+    Protocol,
+    auto::AutoClient,
+    http1::Http1Client,
+    http2::Http2Client,
+    http3::Http3Client,
+    websocket::WebSocketClient,
+    grpc::GrpcClient,
+};
+use request::Request;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
+    // Initialize rustls crypto provider
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    if let Err(e) = run().await {
+        eprintln!("{} {}", "Error:".red().bold(), e);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
+    let request = Request::from_cli(&cli)?;
 
-    match cli.command {
-        Some(Commands::Http1 { method, url }) => {
-            let client: Box<dyn ApiProtocol> = Box::new(protocols::http::HttpClient {
-                version: Some(protocols::http::HttpVersion::Http1),
-            });
-            let (request, response) = client.execute(method, &url).await?;
+    // Determine which protocol to use
+    let protocol = cli.determine_protocol();
 
-            let _ = render_response(
-                &request,
-                &response,
-                cli.verbose,
-                HashSet::from_iter(cli.verbose_detail),
-            )?;
-        }
-
-        Some(Commands::Http2 { method, url }) => {
-            let client: Box<dyn ApiProtocol> = Box::new(protocols::http::HttpClient {
-                version: Some(protocols::http::HttpVersion::Http2),
-            });
-            let (request, response) = client.execute(method, &url).await?;
-
-            let _ = render_response(
-                &request,
-                &response,
-                cli.verbose,
-                HashSet::from_iter(cli.verbose_detail),
-            )?;
-        }
-
-        Some(Commands::Http3 { method, url }) => {
-            // TODO: grpc call
-            println!("Performing http/3 {:?} to {}", method, url);
-        }
-
-        Some(Commands::Grpc { method, url }) => {
-            // TODO: grpc call
-            println!("Performing gRPC {:?} to {}", method, url);
-        }
-
-        Some(Commands::Completion { shell }) => {
-            let cmd = &mut Cli::command();
-            generate(shell, cmd, cmd.get_name().to_string(), &mut io::stdout());
-        }
-
-        None => {
-            // A[Start Request] --> B{HTTPS?}
-            // B -->|Yes| C[ALPN Negotiation]
-            // B -->|No| D[Try h2c Prior Knowledge]
-            // C -->|h2| E[Use HTTP/2]
-            // C -->|http/1.1| F[Use HTTP/1.1]
-            if let Some(url) = cli.url {
-                let client: Box<dyn ApiProtocol> =
-                    Box::new(protocols::http::HttpClient { version: None });
-                let (request, response) = client.execute(Method::GET, &url).await?;
-
-                let _ = render_response(
-                    &request,
-                    &response,
-                    cli.verbose,
-                    HashSet::from_iter(cli.verbose_detail),
-                );
+    // Select the appropriate client
+    let client: Box<dyn Protocol> = match protocol {
+        ProtocolType::Auto => {
+            // Auto-detect based on URL
+            if request.url.starts_with("ws://") || request.url.starts_with("wss://") {
+                Box::new(WebSocketClient::new())
             } else {
-                eprintln!("No command or URL provided. Try `--help`.");
+                // Use ALPN to negotiate between HTTP/1.1 and HTTP/2
+                Box::new(AutoClient::new())
             }
         }
+        ProtocolType::Http1 => Box::new(Http1Client::new()),
+        ProtocolType::Http2 => Box::new(Http2Client::new()),
+        ProtocolType::Http3 => Box::new(Http3Client::new()),
+        ProtocolType::Websocket => Box::new(WebSocketClient::new()),
+        ProtocolType::Grpc => Box::new(GrpcClient::new()),
+    };
+
+    // Execute the request
+    let response = client.execute(&request).await?;
+
+    // Display the response
+    response.display(cli.verbose, &cli.output_format);
+
+    // Exit with appropriate code
+    if response.is_success() {
+        Ok(())
+    } else {
+        std::process::exit(1)
     }
-
-    Ok(())
 }
-
-fn render_response(
-    request: &ApiRequest,
-    response: &ApiResponse,
-    verbosity: Verbosity,
-    verbose_detail: HashSet<VerboseDetail>,
-) -> Result<(), Box<dyn Error>> {
-    if matches!(verbosity, Verbosity::Debug | Verbosity::Verbose) {
-        if verbose_detail.contains(&VerboseDetail::All)
-            | verbose_detail.contains(&VerboseDetail::RequestDetails)
-        {
-            request_output!({
-                println!("> {} {} {}", request.method, request.path, request.version);
-
-                if let Some(header_vec) = &request.headers {
-                    for (name, value) in header_vec {
-                        println!("{} {}: {}", ">", name, value);
-                    }
-                }
-            });
-        }
-
-        if verbose_detail.contains(&VerboseDetail::All)
-            | verbose_detail.contains(&VerboseDetail::ResponseDetails)
-        {
-            response_output!({
-                // TODO: Show resolved IP (requires DNS lookup)
-                //let host = response..url().host_str().unwrap_or("unknown");
-                let ip = response
-                    .ip
-                    .map(|addr| addr.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-
-                println!("* Connected to {} ({})", "unknown", ip);
-                println!("* HTTP Version: {}", response.version);
-                println!("* Request took: {:?}", response.duration);
-
-                let status = response.status.unwrap_or_else(|| 0);
-                println!("< {} {} {}", response.path, response.version, status);
-                if let Some(header_vec) = &response.headers {
-                    for (name, value) in header_vec {
-                        println!("{} {}: {}", "<", name, value);
-                    }
-                }
-
-                println!("<");
-            });
-        }
-    }
-
-    response.render_body();
-
-    Ok(())
-}
-
-// A[Start Request] --> B{HTTPS?}
-// B -->|Yes| C[ALPN Negotiation]
-// B -->|No| D[Try h2c Prior Knowledge]
-// C -->|h2| E[Use HTTP/2]
-// C -->|http/1.1| F[Use HTTP/1.1]
-// D -->|Success| E
-// D -->|Fail| F
-// A --> G[Check Alt-Svc/DNS for HTTP/3]
-// G -->|Supported| H[QUIC Handshake]
-// H -->|Success| I[Use HTTP/3]
-// H -->|Fail| C
-
-/*
-   main -> http, grpc, websockets?
-       http -> http, https?
-           http -> 1.1, h2c
-           https -> 1.1, h2, h3
-
-        grpc -> http, https
-            http -> insecure
-            https -> secure
-*/
